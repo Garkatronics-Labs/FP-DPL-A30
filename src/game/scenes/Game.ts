@@ -1,4 +1,5 @@
 import { Scene } from "phaser";
+import { Bugfender } from "@bugfender/sdk";
 
 export class Game extends Scene {
     player: Phaser.GameObjects.Sprite;
@@ -15,12 +16,16 @@ export class Game extends Scene {
     pokemonSprite: Phaser.GameObjects.Image | null = null;
     pokemonText: Phaser.GameObjects.Text | null = null;
     inputElement: HTMLInputElement | null = null;
+    errorButtonsContainer: HTMLDivElement | null = null;
+    lastAttack: string | null = null;
 
     constructor() {
         super("Game");
     }
 
     create() {
+        Bugfender.log("App cargada. Escena 'Game' inicializada.");
+
         this.cameras.main.setBackgroundColor(0x1a1a2e);
 
         this.anims.create({
@@ -79,6 +84,9 @@ export class Game extends Scene {
             if (anim.key === "attack1" || anim.key === "attack2") {
                 this.attacking = false;
                 this.player.play("idle");
+                Bugfender.log(
+                    `Ataque completado: ${anim.key} | posición jugador: (${Math.round(this.player.x)}, ${Math.round(this.player.y)})`
+                );
             }
         });
 
@@ -91,7 +99,6 @@ export class Game extends Scene {
             q: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.Q),
         };
 
-        // UI Pokemon
         this.add.text(16, 16, "Pokemon:", { fontSize: 14, color: "#aaaaaa" });
 
         this.inputElement = document.createElement("input");
@@ -113,7 +120,11 @@ export class Game extends Scene {
         document.body.appendChild(this.inputElement);
 
         this.inputElement.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") this.fetchPokemon(this.inputElement!.value.trim().toLowerCase());
+            if (e.key === "Enter") {
+                const name = this.inputElement!.value.trim().toLowerCase();
+                Bugfender.log(`Usuario buscó pokemon: "${name}"`);
+                this.fetchPokemon(name);
+            }
             e.stopPropagation();
         });
 
@@ -121,23 +132,87 @@ export class Game extends Scene {
 
         this.fetchPokemon("pikachu");
 
-        this.events.on("destroy", () => this.inputElement?.remove());
+        this.createErrorButtons();
+
+        this.events.on("destroy", () => {
+            this.inputElement?.remove();
+            this.errorButtonsContainer?.remove();
+        });
+    }
+
+    createErrorButtons() {
+        this.errorButtonsContainer = document.createElement("div");
+        this.errorButtonsContainer.style.cssText = `
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            display: flex;
+            gap: 8px;
+        `;
+
+        const btnStyle = `
+            padding: 6px 12px;
+            font-size: 13px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        `;
+
+        const btn1 = document.createElement("button");
+        btn1.textContent = "Error: TypeError";
+        btn1.style.cssText = btnStyle + "background: #c0392b; color: white;";
+        btn1.addEventListener("click", () => {
+            try {
+                const obj: any = null;
+                obj.propiedad.inexistente; 
+            } catch (e) {
+                const err = e as Error;
+                Bugfender.sendCrash(
+                    "TypeError de prueba",
+                    `${err.name}: ${err.message}\nStack: ${err.stack}`
+                );
+                console.error("[Bugfender] TypeError capturado:", err.message);
+            }
+        });
+
+        const btn2 = document.createElement("button");
+        btn2.textContent = "Error: RangeError";
+        btn2.style.cssText = btnStyle + "background: #e67e22; color: white;";
+        btn2.addEventListener("click", () => {
+            try {
+                const arr = new Array(-1);
+            } catch (e) {
+                const err = e as Error;
+                Bugfender.sendCrash(
+                    "RangeError de prueba",
+                    `${err.name}: ${err.message}\nStack: ${err.stack}`
+                );
+                console.error("[Bugfender] RangeError capturado:", err.message);
+            }
+        });
+
+        this.errorButtonsContainer.appendChild(btn1);
+        this.errorButtonsContainer.appendChild(btn2);
+        document.body.appendChild(this.errorButtonsContainer);
     }
 
     fetchPokemon(name: string) {
         if (!name) return;
 
         fetch(`https://pokeapi.co/api/v2/pokemon/${name}`)
-            .then(res => {
-                if (!res.ok) throw new Error("No encontrado");
+            .then((res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status} para pokemon "${name}"`);
                 return res.json();
             })
-            .then(data => {
+            .then((data) => {
                 const spriteUrl: string = data.sprites.front_default;
                 const hp = data.stats.find((s: any) => s.stat.name === "hp")?.base_stat ?? "?";
                 const types = data.types.map((t: any) => t.type.name).join(", ");
 
                 this.pokemonText!.setText(`${data.name} | HP: ${hp} | ${types}`);
+
+                Bugfender.log(`Pokemon cargado: ${data.name} | HP: ${hp} | Tipos: ${types}`);
 
                 const key = `poke_${data.name}`;
                 if (this.textures.exists(key)) {
@@ -148,8 +223,13 @@ export class Game extends Scene {
                     this.load.start();
                 }
             })
-            .catch(() => {
+            .catch((e: Error) => {
+                Bugfender.sendCrash(
+                    "Error al cargar pokemon",
+                    `Pokemon buscado: "${name}" | ${e.message}`
+                );
                 this.pokemonText!.setText("Pokemon no encontrado");
+                console.error("[Bugfender] fetchPokemon error:", e.message);
             });
     }
 
@@ -169,12 +249,20 @@ export class Game extends Scene {
         if (Phaser.Input.Keyboard.JustDown(this.keys.e)) {
             this.attacking = true;
             this.player.play("attack2");
+
+            Bugfender.log(
+                `Ataque iniciado: attack2 | posición: (${Math.round(this.player.x)}, ${Math.round(this.player.y)})`
+            );
             return;
         }
 
         if (Phaser.Input.Keyboard.JustDown(this.keys.q)) {
             this.attacking = true;
             this.player.play("attack1");
+
+            Bugfender.log(
+                `Ataque iniciado: attack1 | posición: (${Math.round(this.player.x)}, ${Math.round(this.player.y)})`
+            );
             return;
         }
 
